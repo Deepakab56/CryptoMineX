@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-solana-purple: #9945FF;
+  --color-solana-green: #14F195;
+  --color-dark-bg: #050505;
+  --color-card-bg: #0a0a0a;
+  --color-border: #1a1a1a;
+}
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-slate-300 font-sans antialiased;
+  }
+}
+
+.glass-card {
+  @apply bg-card-bg border border-border rounded-xl;
+}
+
+.nav-link {
+  @apply px-4 py-2 text-sm font-medium transition-colors hover:text-solana-green;
+}
+
+.nav-link-active {
+  @apply text-solana-green border-b-2 border-solana-green;
+}
+
+.btn-primary {
+  @apply bg-solana-green text-black font-bold py-3 px-6 rounded-lg transition-transform active:scale-95 hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-outline {
+  @apply border border-solana-green/30 text-solana-green font-medium py-2 px-4 rounded-lg hover:bg-solana-green/10 transition-colors;
+}
+
+.number-btn {
+  @apply w-full aspect-square flex items-center justify-center rounded-lg bg-white/5 border border-white/5 font-bold text-lg transition-all hover:bg-white/10;
+}
+
+.number-btn-selected {
+  @apply bg-solana-green text-black border-solana-green shadow-[0_0_15px_rgba(20,241,149,0.3)];
+}
