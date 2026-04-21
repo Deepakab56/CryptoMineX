@@ -28,15 +28,15 @@ pub struct WinnerUser<'info> {
     pub treasury: SystemAccount<'info>,
 
     #[account(
-        mut,
-        seeds = [
-            b"ticket",
-            global_account.round_id.to_le_bytes().as_ref(),
-            &[round_account.winner_ticket], // ✅ Bug 1 fixed — u8 as 1-byte slice
-        ],
-        bump
-    )]
-    pub ticket_account: Account<'info, Ticket>,
+    mut,
+    seeds = [
+        b"ticket",
+        global_account.round_id.to_le_bytes().as_ref(),
+        &[round_account.winner_ticket],
+    ],
+    bump
+)]
+    pub ticket_account: Option<Account<'info, Ticket>>,
 
     #[account(
         mut,
@@ -46,28 +46,58 @@ pub struct WinnerUser<'info> {
 
     pub system_program: Program<'info, System>,
 }
+
 pub fn process_distribute_reward<'info>(
     ctx: Context<'_, '_, 'info, 'info, WinnerUser<'info>>
 ) -> Result<()> {
+
     let round = &mut ctx.accounts.round_account;
-    let ticket = &ctx.accounts.ticket_account;
     let global = &ctx.accounts.global_account;
 
     require!(
-        round.end_time < Clock::get()?.unix_timestamp as u64,
+        round.end_time < (Clock::get()?.unix_timestamp as u64),
         CustomError::RoundNotEnded
     );
-    require!(round.winner_ticket != 0, CustomError::WinnerNotRevealed);
+
+    require!(
+        round.winner_ticket != 0,
+        CustomError::WinnerNotRevealed
+    );
 
     let treasury_lamports = **ctx.accounts.treasury.to_account_info().lamports.borrow();
+
     require!(treasury_lamports > 0, CustomError::TreasuryEmpty);
 
-  
     let round_id_bytes = global.round_id.to_le_bytes();
     let treasury_bump = ctx.bumps.treasury;
+
     let seeds: &[&[u8]] = &[b"treasury", round_id_bytes.as_ref(), &[treasury_bump]];
     let signer_seeds: &[&[&[u8]]] = &[seeds];
 
+   
+    if ctx.accounts.ticket_account.is_none() {
+        transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.treasury.to_account_info(),
+                    to: ctx.accounts.admin.to_account_info(),
+                },
+                signer_seeds
+            ),
+            treasury_lamports
+        )?;
+
+        msg!("❌ No ticket account → full amount sent to admin");
+
+        round.is_distribted_reward = true;
+        return Ok(());
+    }
+
+
+    let ticket = ctx.accounts.ticket_account.as_ref().unwrap();
+
+    // ✅ CASE 2A: no users
     if ticket.users.is_empty() {
         transfer(
             CpiContext::new_with_signer(
@@ -76,27 +106,34 @@ pub fn process_distribute_reward<'info>(
                     from: ctx.accounts.treasury.to_account_info(),
                     to: ctx.accounts.admin.to_account_info(),
                 },
-                signer_seeds,
+                signer_seeds
             ),
-            treasury_lamports,
+            treasury_lamports
         )?;
-        msg!("No winners — {} lamports returned to admin", treasury_lamports);
+
+        msg!("⚠️ No users → full amount sent to admin");
+
+        round.is_distribted_reward = true;
         return Ok(());
     }
 
+  
 
     let mut total_winning_amount: u64 = 0;
+
     for i in 0..ticket.users.len() {
         let user_ticket_acc = ctx.remaining_accounts
             .get(i * 2 + 1)
             .ok_or(CustomError::MissingWinnerAccount)?;
+
         let user_ticket: Account<UserTicket> = Account::try_from(user_ticket_acc)?;
         total_winning_amount += user_ticket.amount;
     }
+
     require!(total_winning_amount > 0, CustomError::InvalidAmount);
 
-
     let mut total_sent: u64 = 0;
+
     for i in 0..ticket.users.len() {
         let user_account = ctx.remaining_accounts
             .get(i * 2)
@@ -120,17 +157,19 @@ pub fn process_distribute_reward<'info>(
                     from: ctx.accounts.treasury.to_account_info(),
                     to: user_account.clone(),
                 },
-                signer_seeds,
+                signer_seeds
             ),
-            reward,
+            reward
         )?;
 
         total_sent += reward;
+
         msg!("💸 Sent {} lamports to {}", reward, user_account.key());
     }
 
- 
+    // 🧹 leftover dust → admin
     let dust = treasury_lamports.saturating_sub(total_sent);
+
     if dust > 0 {
         transfer(
             CpiContext::new_with_signer(
@@ -139,15 +178,17 @@ pub fn process_distribute_reward<'info>(
                     from: ctx.accounts.treasury.to_account_info(),
                     to: ctx.accounts.admin.to_account_info(),
                 },
-                signer_seeds,
+                signer_seeds
             ),
-            dust,
+            dust
         )?;
+
         msg!("🧹 Dust {} lamports sent to admin", dust);
     }
 
     round.is_distribted_reward = true;
-    msg!("🎯 Proportional reward distribution complete");
+
+    msg!("🎯 Distribution complete");
 
     Ok(())
 }

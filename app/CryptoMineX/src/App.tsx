@@ -52,13 +52,19 @@ const AppContent = () => {
     ? publicKey.toBase58().slice(0, 4) + "..." + publicKey.toBase58().slice(-4)
     : "";
 
-  const handleNumberToggle = (num: number) => {
-    if (selectedNumbers.includes(num)) {
-      setSelectedNumbers((prev) => prev.filter((n) => n !== num));
-    } else if (selectedNumbers.length < 25) {
-      setSelectedNumbers((prev) => [...prev, num]);
+ const handleNumberToggle = (num: number) => {
+    // ✅ -1 = clear all (after buy ticket)
+    if (num === -1) {
+        setSelectedNumbers([]);
+        return;
     }
-  };
+
+    if (selectedNumbers.includes(num)) {
+        setSelectedNumbers(prev => prev.filter(n => n !== num));
+    } else if (selectedNumbers.length < 25) {
+        setSelectedNumbers(prev => [...prev, num]);
+    }
+};
 
   const buyTicket = async () => {
     if (!connected || selectedNumbers.length === 0) return;

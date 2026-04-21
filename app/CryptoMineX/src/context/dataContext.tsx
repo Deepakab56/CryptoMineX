@@ -1,4 +1,10 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { getGlobalPda, getRoundPda, getTicketpda } from "../utils/getPda";
 import { useProgram } from "../utils/intance";
 import { useConnection } from "@solana/wallet-adapter-react";
@@ -31,6 +37,13 @@ type ContextType = {
   getdata: () => Promise<void>; // ✅ added
   getRoundData: () => Promise<void>;
   getTicketData: () => Promise<void>;
+  gameStatus: "live" | "ended" | "reset";
+  setGameStatus: React.Dispatch<
+    React.SetStateAction<"live" | "ended" | "reset" | "waiting">
+  >;
+
+  winnerNumber: number | null;
+  setWinnerNumber: React.Dispatch<React.SetStateAction<number | null>>;
 };
 
 export const MyContext = createContext<ContextType | null>(null);
@@ -53,6 +66,10 @@ export const MyContextProvider = ({ children }: ProviderProps) => {
     randomnessAccount: "",
   });
   const [tickets, setTickets] = useState<TicketInfo[]>([]);
+  const [gameStatus, setGameStatus] = useState<
+    "live" | "ended" | "reset" | "waiting"
+  >("live");
+  const [winnerNumber, setWinnerNumber] = useState<number | null>(null);
 
   const { program, programId } = useProgram();
   const { connection } = useConnection();
@@ -123,33 +140,58 @@ export const MyContextProvider = ({ children }: ProviderProps) => {
     }
   };
 
+  // dataContext.tsx mein add karo
+
+  useEffect(() => {
+    if (!program) return;
+
+    const poll = setInterval(async () => {
+      try {
+        await getRoundData();
+        await getTicketData();
+      } catch (err) {
+        console.log("Poll error:", err);
+      }
+    }, 10_000); // 10 seconds
+
+    return () => clearInterval(poll);
+  }, [program]);
+
+  // ✅ getTicketData fix — roundData.roundId stale problem
   const getTicketData = async () => {
     try {
       if (!program) return;
+
+      // ✅ Fresh roundId chain se lo — roundData.roundId stale ho sakta hai
+      const globalPda = getGlobalPda(programId);
+      const globalData = await program.account.globalState.fetch(globalPda);
+      const freshRoundId = Number(globalData.roundId);
+
+      if (!freshRoundId) return;
 
       const temp: TicketInfo[] = [];
 
       for (let i = 1; i <= 25; i++) {
         try {
-          const ticketPda = getTicketpda(roundData.roundId, programId, i);
+          const ticketPda = getTicketpda(freshRoundId, programId, i); // ✅ fresh
 
           const data = await program.account.ticket.fetchNullable(ticketPda);
 
-          if (!data) {
-            temp.push({
-              ticketNo: i,
-              exists: false,
-              totalAmount: "0",
-              users: [],
-            });
-          } else {
-            temp.push({
-              ticketNo: i,
-              exists: true,
-              totalAmount: data.totalAmount.toString(),
-              users: data.users.map((u: any) => u.toBase58()),
-            });
-          }
+          temp.push(
+            data
+              ? {
+                  ticketNo: i,
+                  exists: true,
+                  totalAmount: data.totalAmount.toString(),
+                  users: data.users.map((u: any) => u.toBase58()),
+                }
+              : {
+                  ticketNo: i,
+                  exists: false,
+                  totalAmount: "0",
+                  users: [],
+                },
+          );
         } catch (err) {
           console.log("Error ticket:", i, err);
         }
@@ -160,7 +202,6 @@ export const MyContextProvider = ({ children }: ProviderProps) => {
       console.log(error);
     }
   };
-
   // const getTicketData = async () => {
   //   const data = await fetch(
   //     "http://192.168.1.31:3000/api/lottery/ticket_data",
@@ -181,6 +222,10 @@ export const MyContextProvider = ({ children }: ProviderProps) => {
         getTicketData,
         setTickets,
         tickets,
+        gameStatus,
+        setGameStatus,
+        winnerNumber,
+        setWinnerNumber,
       }}
     >
       {children}

@@ -37,7 +37,7 @@ pub fn process_initialize_round(ctx: Context<OpenRound>) -> Result<()> {
 
     round.round_id = global.round_id;
     round.start_time = current_time;
-    round.end_time = current_time + 600;
+    round.end_time = current_time + 60;
 
     round.winner_ticket = 0;
     round.total_amount = 0;

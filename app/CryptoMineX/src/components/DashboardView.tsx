@@ -45,8 +45,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const { program, provider, programId } = useProgram();
   const wallet = useAnchorWallet();
   const connection = useConnection();
-  const { roundData, getdata, getRoundData, getTicketData, tickets } =
-    useMyContext();
+  const {
+    roundData,
+    getdata,
+    getRoundData,
+    getTicketData,
+    tickets,
+    gameStatus,
+    setGameStatus,
+    winnerNumber,
+    setWinnerNumber,
+  } = useMyContext();
 
   useEffect(() => {
     getRoundData();
@@ -54,13 +63,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     getdata();
   }, [connection, wallet]);
 
+  // DashboardView.tsx
+
   const handlebuyticket = async () => {
     try {
       if (!program || !wallet?.publicKey || !provider) return;
 
       const globalPda = getGlobalPda(programId);
       const roundPda = getRoundPda(roundData.currentRound, programId);
-
       const transaction = new Transaction();
 
       for (let i = 0; i < selectedNumbers.length; i++) {
@@ -71,22 +81,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           programId,
           ticketNo,
         );
-
         const userTicketPda = getUserTicketPda(
           roundData.currentRound,
           programId,
           wallet.publicKey,
           ticketNo,
         );
-
         const treasury = getTreasuryAccount(roundData.currentRound, programId);
 
-        // ✅ FIX: instruction
         const ix = await program.methods
-          .buyTicket(
-            ticketNo,
-            new BN(LAMPORTS_PER_SOL / 10), // ✅ 0.1 SOL safe
-          )
+          .buyTicket(ticketNo, new BN(LAMPORTS_PER_SOL / 10))
           .accounts({
             globalAccount: globalPda,
             roundAccount: roundPda,
@@ -99,17 +103,64 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         transaction.add(ix);
       }
 
-      // ✅ send once (batch tx)
       const txHash = await provider.sendAndConfirm(transaction);
-
       console.log("TX:", txHash);
-      getRoundData();
-      getTicketData();
-      getdata();
+
+      // ✅ Fix 1: Selected numbers clear karo
+      onNumberToggle(-1); // parent ko signal do clear karne ka
+
+      // ✅ Fix 2: Sirf zaroorat wala data fetch karo
+      await getRoundData();
+      await getTicketData();
+      // getdata() mat karo — unnecessary hai
     } catch (error) {
       console.error("Buy ticket error:", error);
     }
   };
+
+  // ✅ gameStatus watch karo
+  useEffect(() => {
+    if (gameStatus === "reset") {
+      console.log("🔄 New round — clearing old data...");
+
+      // Old data turant clear karo
+      setWinnerNumber(null);
+
+      // ✅ Thodi der baad naya data fetch karo
+      // (backend ko new round create karne ka time do)
+      const timer = setTimeout(async () => {
+        await getRoundData(); // naya round_id aayega
+        await getTicketData(); // fresh tickets
+        await getdata();
+        setGameStatus("live"); // ✅ ab live karo
+      }, 3000); // 3s wait — backend new round banaye
+
+      return () => clearTimeout(timer);
+    }
+  }, [gameStatus]);
+
+  useEffect(() => {
+    const handleReset = async () => {
+      console.log("🔄 Reset triggered from animation");
+
+      setGameStatus("reset");
+      setWinnerNumber(null);
+
+      // wait backend
+      await new Promise((r) => setTimeout(r, 5000));
+
+      await getRoundData();
+      await getTicketData();
+
+      setGameStatus("live");
+    };
+
+    window.addEventListener("ROUND_RESET", handleReset);
+
+    return () => {
+      window.removeEventListener("ROUND_RESET", handleReset);
+    };
+  }, []);
 
   return (
     <div className="space-y-12">
@@ -131,8 +182,140 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <CountdownTimer
           startTime={roundData.startTime}
           endTime={roundData.endTime}
-          onEnd={() => {
-            console.log("Game ended → reveal winner");
+          onEnd={async () => {
+            const roundPda = getRoundPda(roundData.currentRound, programId);
+
+            let onChainRound;
+            try {
+              onChainRound = await program.account.round.fetch(roundPda);
+            } catch (err) {
+              console.log("Fetch error:", err);
+              return;
+            }
+
+            console.log("🔍 End check — users:", onChainRound.users.length);
+
+            // ─── CASE 1: Koi user nahi ───────────────────────────
+            if (onChainRound.users.length === 0) {
+              console.log("👻 No users — waiting for backend...");
+              setGameStatus("reset");
+
+              const currentRoundId = roundData.currentRound;
+
+              const waitForNewRound = async () => {
+                let retries = 0;
+                const MAX = 40; // 40 * 5s = 200s max
+                const INTERVAL = 5000; // ✅ 5s — close round delay handle
+
+                while (retries < MAX) {
+                  // ✅ Pehle wait karo — backend ko time do
+                  await new Promise((r) => setTimeout(r, INTERVAL));
+
+                  try {
+                    const globalPda = getGlobalPda(programId);
+                    const globalData = await program.account.globalState.fetch(
+                      globalPda,
+                    );
+
+                    const newRoundId = globalData.roundId.toString();
+
+                    console.log(
+                      `⏳ Waiting new round... current: ${currentRoundId},`,
+                      `chain: ${newRoundId} (attempt ${retries + 1}/${MAX})`,
+                    );
+
+                    // ✅ Round ID badla = naya round ready
+                    if (newRoundId !== currentRoundId) {
+                      console.log("🟢 New round detected:", newRoundId);
+
+                      // ✅ Thoda aur wait — round account initialize ho jaye
+                      await new Promise((r) => setTimeout(r, 3000));
+
+                      await getRoundData();
+                      await getTicketData();
+                      setGameStatus("live");
+                      return;
+                    }
+
+                    // ✅ Round ID same but isRoundActive true = naya round chal raha
+                    if (
+                      globalData.isRoundActive &&
+                      newRoundId !== currentRoundId
+                    ) {
+                      console.log("🟢 Round active:", newRoundId);
+                      await getRoundData();
+                      await getTicketData();
+                      setGameStatus("live");
+                      return;
+                    }
+                  } catch (err) {
+                    console.log("⚠️ Poll error (retrying):", err.message);
+                  }
+
+                  retries++;
+                }
+
+                // ❌ Timeout — manually refresh
+                console.log("⏰ Timeout — force refresh");
+                await getRoundData();
+                await getTicketData();
+                setGameStatus("live");
+              };
+
+              waitForNewRound();
+              return;
+            }
+
+            // ─── CASE 2: Users hain — winner poll karo ───────────
+            setGameStatus("waiting");
+
+            const pollWinner = async () => {
+              let retries = 0;
+              const MAX_RETRIES = 20; // 20 * 5s = 100s
+              const INTERVAL = 5000; // ✅ 5s interval
+
+              while (retries < MAX_RETRIES) {
+                await new Promise((r) => setTimeout(r, INTERVAL));
+
+                try {
+                  const fresh = await program.account.round.fetch(roundPda);
+                  console.log(
+                    `🔍 Poll winner... ticket: ${fresh.winnerTicket}`,
+                    `(attempt ${retries + 1}/${MAX_RETRIES})`,
+                  );
+
+                  if (fresh.winnerTicket && fresh.winnerTicket !== 0) {
+                    setWinnerNumber(fresh.winnerTicket);
+                    setGameStatus("ended");
+
+                    setTimeout(async () => {
+                      setGameStatus("reset");
+                      setWinnerNumber(null);
+
+                      // ✅ Backend ko new round banane ka time do
+                      await new Promise((r) => setTimeout(r, 8000));
+                      await getRoundData();
+                      await getTicketData();
+                      setGameStatus("live");
+                    }, 6000);
+
+                    return;
+                  }
+                } catch (err) {
+                  console.log("⚠️ Poll error:", err);
+                }
+
+                retries++;
+              }
+
+              console.log("⏰ Poll timeout — force reset");
+              setGameStatus("reset");
+              await getRoundData();
+              await getTicketData();
+              setGameStatus("live");
+            };
+
+            pollWinner();
           }}
         />
       </div>
@@ -199,6 +382,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 selectedNumbers={selectedNumbers}
                 onToggle={onNumberToggle}
                 tickets={tickets}
+                gameStatus={gameStatus}
+                winnerNumber={winnerNumber}
               />
             </div>
           </div>
