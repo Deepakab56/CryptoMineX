@@ -101,6 +101,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           .instruction();
 
         transaction.add(ix);
+
+
+        
       }
 
       const txHash = await provider.sendAndConfirm(transaction);
